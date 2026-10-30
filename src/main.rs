@@ -98,6 +98,118 @@ fn uptime_sec() -> u64 {
         .unwrap_or(0.0) as u64
 }
 
+// ---------- 监控 / 文件系统 ----------
+fn cpu_pct() -> f64 {
+    // 读 /proc/stat 两次（间隔 200ms）算 CPU 占用
+    let sample = || -> (u64, u64) {
+        let txt = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+        let line = txt.lines().find(|l| l.starts_with("cpu ")).unwrap_or("");
+        let nums: Vec<u64> = line.split_whitespace().skip(1).filter_map(|s| s.parse().ok()).collect();
+        if nums.len() < 4 { return (0, 0); }
+        let idle = nums[3] + nums.get(4).copied().unwrap_or(0);
+        (nums.iter().sum::<u64>(), idle)
+    };
+    let (t1, i1) = sample();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let (t2, i2) = sample();
+    let dt = t2.saturating_sub(t1);
+    let di = i2.saturating_sub(i1);
+    if dt == 0 { return 0.0; }
+    (100.0 * (dt - di) as f64 / dt as f64).max(0.0)
+}
+
+fn temp_c() -> f64 {
+    // /sys/class/thermal/thermal_zone0/temp 单位毫摄氏度
+    let paths = ["/sys/class/thermal/thermal_zone0/temp", "/sys/class/thermal/thermal_zone1/temp"];
+    for p in paths {
+        if let Ok(s) = std::fs::read_to_string(p) {
+            if let Ok(v) = s.trim().parse::<f64>() { return v / 1000.0; }
+        }
+    }
+    0.0
+}
+
+fn net_rx_tx() -> (u64, u64) {
+    // /proc/net/dev: 网卡累计 rx/tx 字节（前端按轮询差分算速率）
+    let txt = std::fs::read_to_string("/proc/net/dev").unwrap_or_default();
+    let mut rx = 0u64; let mut tx = 0u64;
+    for line in txt.lines().skip(2) {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() < 2 { continue; }
+        let iface = parts[0].trim();
+        if iface == "lo" { continue; }
+        let vals: Vec<u64> = parts[1].split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        if vals.len() >= 9 { rx += vals[0]; tx += vals[8]; }
+    }
+    (rx, tx)
+}
+
+fn lan_ips() -> Vec<String> {
+    let (_, out) = run_cmd("ip -4 -o addr show 2>/dev/null | awk '{print $2\"=\"$4}' | grep -v 'lo\\|127.0.0.1'");
+    out.lines().map(|s| s.split('/').next().unwrap_or("").to_string()).collect()
+}
+
+fn drives() -> Vec<serde_json::Value> {
+    // df -P 解析块设备挂载
+    let (_, out) = run_cmd("df -P -B1 2>/dev/null | grep -vE 'tmpfs|devtmpfs|overlay|proc|sysfs|cgroup'");
+    let mut v = Vec::new();
+    for line in out.lines().skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 6 { continue; }
+        let dev = f[0];
+        if dev == "Filesystem" || dev.contains("shm") { continue; }
+        v.push(json!({
+            "device": dev, "size": f[1].parse::<u64>().unwrap_or(0),
+            "used": f[2].parse::<u64>().unwrap_or(0),
+            "avail": f[3].parse::<u64>().unwrap_or(0),
+            "pct": f[4].trim_end_matches('%').parse::<u64>().unwrap_or(0),
+            "mount": f[5],
+        }));
+    }
+    v
+}
+
+fn urldecode(s: &str) -> String {
+    // 简易百分号解码（支持 %XX）
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Ok(h), Ok(l)) = (hex(b[i+1]), hex(b[i+2])) {
+                out.push((h << 4) | l); i += 3; continue;
+            }
+        }
+        out.push(b[i]); i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+fn hex(c: u8) -> Result<u8, ()> {
+    match c { b'0'..=b'9' => Ok(c - b'0'), b'a'..=b'f' => Ok(c - b'a' + 10), b'A'..=b'F' => Ok(c - b'A' + 10), _ => Err(()) }
+}
+
+fn fs_list(path: &str) -> Vec<serde_json::Value> {
+    let mut v = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(path) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; } // 默认隐藏
+            let is_dir = e.path().is_dir();
+            let size = if is_dir { 0 } else { e.metadata().map(|m| m.len()).unwrap_or(0) };
+            let mtime = e.metadata().and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as u64).unwrap_or(0);
+            v.push(json!({"name": name, "is_dir": is_dir, "size": size, "mtime": mtime}));
+        }
+    }
+    v.sort_by(|a, b| {
+        let ad = a["is_dir"].as_bool().unwrap_or(false);
+        let bd = b["is_dir"].as_bool().unwrap_or(false);
+        bd.cmp(&ad).then(a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
+    });
+    v
+}
+
 fn json_resp(v: serde_json::Value) -> Response<std::io::Cursor<Vec<u8>>> {
     let body = serde_json::to_vec(&v).unwrap_or_default();
     Response::from_data(body).with_header(
@@ -166,6 +278,32 @@ fn main() {
                 "uptime_sec": up,
                 "arch": std::env::consts::ARCH,
             }))
+        } else if method == tiny_http::Method::Get && url == "/api/status" {
+            let (mt, ma) = mem_mb();
+            let (rx, tx) = net_rx_tx();
+            json_resp(json!({
+                "cpu_pct": cpu_pct(), "temp_c": temp_c(),
+                "mem_total_mb": mt, "mem_avail_mb": ma,
+                "mem_pct": if mt > 0 { (100.0 * (mt - ma) as f64 / mt as f64) } else { 0.0 },
+                "net_rx": rx, "net_tx": tx,
+                "load1": loadavg().0, "uptime_sec": uptime_sec(),
+                "ips": lan_ips(),
+                "drives": drives(),
+            }))
+        } else if method == tiny_http::Method::Get && url == "/api/drives" {
+            json_resp(json!({"drives": drives()}))
+        } else if method == tiny_http::Method::Get && url.starts_with("/api/fs") {
+            let q = url.split('?').nth(1).unwrap_or("");
+            let path = q.split('&').find(|p| p.starts_with("path=")).map(|p| p[5..].to_string())
+                .unwrap_or_else(|| "/".to_string());
+            let path = urldecode(&path);
+            let (parent, base) = if path == "/" { (String::from("/"), String::from("/")) } else {
+                let p = path.trim_end_matches('/').to_string();
+                let idx = p.rfind('/').map(|i| i).unwrap_or(0);
+                (if idx == 0 { String::from("/") } else { p[..idx].to_string() }, p[idx..].trim_start_matches('/').to_string())
+            };
+            let cur = if path.is_empty() { String::from("/") } else { path.clone() };
+            json_resp(json!({"path": cur, "parent": parent, "base": base, "items": fs_list(&cur)}))
         } else {
             text_resp("text/plain; charset=utf-8", "404".to_string())
         };
