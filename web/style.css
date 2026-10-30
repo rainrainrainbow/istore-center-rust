@@ -186,6 +186,47 @@ body{font-family:"PingFang SC","Microsoft YaHei","WenQuanYi Micro Hei",system-ui
 .fs-status{min-height:30px;background:#fafbfd;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 12px;font-size:12px;color:var(--text-soft)}
 .empty{color:var(--text-soft);text-align:center;padding:40px 0;font-size:14px}
 
+/* ===== 应用商店工具栏 ===== */
+.apps-toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.apps-search{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 14px;flex:1;min-width:220px;box-shadow:var(--shadow)}
+.apps-search input{border:none;outline:none;background:transparent;font-size:13.5px;width:100%;color:var(--text)}
+.apps-cats{display:flex;gap:6px;flex-wrap:wrap}
+.cat-chip{font-size:12.5px;padding:7px 14px;border-radius:20px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:#5a5f6b;transition:.15s}
+.cat-chip:hover{border-color:var(--brand);color:var(--brand)}
+.cat-chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.app-card{cursor:pointer}
+
+/* ===== 应用详情弹窗 ===== */
+.modal{position:fixed;inset:0;background:rgba(20,22,30,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
+.modal-box{background:#fff;border-radius:16px;padding:26px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.25);max-height:88vh;overflow-y:auto}
+.modal-close{position:absolute;top:14px;right:16px;border:none;background:transparent;font-size:18px;cursor:pointer;color:var(--text-soft)}
+.modal-head{position:relative;display:flex;gap:14px;align-items:center;margin-bottom:14px}
+.modal-head .icon{width:52px;height:52px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:27px;flex:0 0 52px}
+.modal-head .title{font-weight:650;font-size:17px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.modal-head .title .ver{font-weight:400;font-size:12.5px;color:var(--text-soft)}
+.modal-head .meta{font-size:12.5px;color:var(--text-soft);margin-top:3px}
+.modal-desc{font-size:13px;color:#5a5f6b;line-height:1.6;padding:12px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.modal-body{padding:8px 0}
+.modal-body .kv{margin:11px 0}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px}
+.modal-actions .act{font-size:13px;padding:8px 16px}
+
+/* ===== 系统信息卡片 ===== */
+.sys-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+.sys-tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:6px}
+.sys-tile b{font-size:16px;font-variant-numeric:tabular-nums;word-break:break-all}
+.sys-tile span{font-size:12px;color:var(--text-soft)}
+
+/* ===== 温度专用显示（替代 % 环形图） ===== */
+.temp-gauge{text-align:center;font-size:12px;color:var(--text-soft);display:flex;flex-direction:column;align-items:center;gap:8px;padding:4px 6px}
+.temp-gauge .temp-val{font-size:16px;font-weight:650;font-variant-numeric:tabular-nums}
+.temp-gauge .temp-bar{width:80px;height:7px;background:#eef0f5;border-radius:4px;overflow:hidden}
+.temp-gauge .temp-bar .bar-fill{height:100%;border-radius:4px;transition:width .4s}
+
+/* ===== 显示隐藏开关 ===== */
+.toggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-soft);cursor:pointer;margin-right:8px}
+.toggle input{width:16px;height:16px;accent-color:var(--brand);cursor:pointer}
+
 @media (max-width: 900px){
   .row{grid-template-columns:1fr}
   .app-grid{grid-template-columns:1fr}
