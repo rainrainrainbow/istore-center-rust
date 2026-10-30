@@ -115,7 +115,7 @@ document.querySelectorAll('.menu a').forEach(a => a.onclick = () => {
   document.querySelectorAll('.menu a').forEach(x => x.classList.remove('active'));
   a.classList.add('active');
   const v = a.dataset.view;
-  if (v === 'apps') { $('#view-title').textContent = '应用商店'; $('#view-sub').textContent = '本机服务管理'; loadApps(); }
+  if (v === 'apps') { $('#view-title').textContent = '应用商店'; $('#view-sub').textContent = '本机服务管理'; stopMonitor(); loadApps(); }
   else if (v === 'monitor') { $('#view-title').textContent = '监控'; $('#view-sub').textContent = '实时状态'; renderMonitor(); startMonitor(); }
   else if (v === 'files') { $('#view-title').textContent = '文件'; $('#view-sub').textContent = '文件浏览器'; stopMonitor(); renderFiles('/'); }
   else { $('#view-title').textContent = '关于'; $('#view-sub').textContent = 'iStore 软件中心'; stopMonitor(); renderAbout(); }
@@ -133,21 +133,24 @@ function fmtRate(bps) {
   if (bps >= 1024) return (bps/1024).toFixed(1)+' KB/s';
   return bps.toFixed(1)+' B/s';
 }
-function donut(pct, color) {
-  return `<div class="donut" style="background:conic-gradient(${color} ${pct*3.6}deg, #ececec ${pct*3.6}deg)"><div class="donut-hole"><b>${pct.toFixed(0)}%</b><span>${pct.toFixed(0)}</span></div></div>`;
+function donut(pct, color, display) {
+  pct = Math.min(100, Math.max(0, pct));
+  const center = display !== undefined ? display : pct.toFixed(0) + '%';
+  return `<div class="donut" style="background:conic-gradient(${color} ${pct*3.6}deg, #ececec ${pct*3.6}deg)"><div class="donut-hole"><b>${center}</b></div></div>`;
 }
 
 let lastNet = null;
 async function pollMonitor() {
   try {
     const r = await fetch('/api/status'); const s = await r.json();
-    // 网络速率 = 差分
+    // 网络速率 = 差分 / 实际间隔（时间戳）
+    const now = Date.now();
     let rxRate = 0, txRate = 0;
     if (lastNet) {
-      rxRate = Math.max(0, s.net_rx - lastNet.rx) / 2; // 每 2s 轮询
-      txRate = Math.max(0, s.net_tx - lastNet.tx) / 2;
+      const dt = (now - lastNet.t) / 1000;
+      if (dt > 0) { rxRate = Math.max(0, s.net_rx - lastNet.rx) / dt; txRate = Math.max(0, s.net_tx - lastNet.tx) / dt; }
     }
-    lastNet = { rx: s.net_rx, tx: s.net_tx };
+    lastNet = { rx: s.net_rx, tx: s.net_tx, t: now };
     monData.push({ rx: rxRate, tx: txRate });
     if (monData.length > 40) monData.shift();
     renderMonitorCards(s, rxRate, txRate);
@@ -187,9 +190,10 @@ function renderMonitor() {
 function renderMonitorCards(s, rx, tx) {
   $('#net-vals').textContent = `下载 ${fmtRate(rx)} · 上传 ${fmtRate(tx)}`;
   $('#net-ip').innerHTML = (s.ips||[]).map(ip => `<div class="ip-row">🌐 <code>${esc(ip)}</code></div>`).join('') || '<div class="muted">无 IPv4</div>';
+  const tempDisp = s.temp_c > 0 ? s.temp_c.toFixed(0) + '℃' : '--';
   $('#sys-donuts').innerHTML = `
     <div class="donut-item">${donut(s.cpu_pct, '#3b82f6')}<span>CPU</span></div>
-    <div class="donut-item">${donut(s.temp_c, '#22c55e')}<span>温度 ℃</span></div>
+    <div class="donut-item">${donut(Math.min(s.temp_c, 100), '#22c55e', tempDisp)}<span>温度</span></div>
     <div class="donut-item">${donut(s.mem_pct, '#8b5cf6')}<span>内存</span></div>`;
   $('#disk-list').innerHTML = (s.drives||[]).map(d => `
     <div class="disk-row">
@@ -231,7 +235,15 @@ async function renderFiles(path) {
   let drives = [];
   try { drives = (await (await fetch('/api/drives')).json()).drives || []; } catch (e) {}
   let data = { path: '/', parent: '/', items: [] };
-  try { data = await (await fetch('/api/fs?path=' + encodeURIComponent(path))).json(); } catch (e) {}
+  let fsErr = null;
+  try {
+    data = await (await fetch('/api/fs?path=' + encodeURIComponent(path))).json();
+    if (data.error) fsErr = data.error;
+  } catch (e) { fsErr = '加载失败：' + (e.message || e); }
+  if (fsErr) {
+    el.innerHTML = `<div class="fs-wrap"><div class="fs-main"><div class="empty" style="color:#888;padding:40px">⚠️ ${esc(fsErr)} <button class="fs-btn" style="margin-left:10px" onclick="renderFiles('/')">返回根目录</button></div></div></div>`;
+    return;
+  }
   const cur = data.path || path;
   const crumbs = cur.split('/').filter(Boolean);
   let crumbHtml = '<span class="crumb" data-p="/">根目录</span>';
