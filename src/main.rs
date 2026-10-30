@@ -116,6 +116,21 @@ fn uptime_sec() -> u64 {
         .unwrap_or(0.0) as u64
 }
 
+fn hostname() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim().to_string()
+}
+
+fn kernel() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim().to_string()
+}
+
+fn proc_count() -> u64 {
+    // /proc 下纯数字目录即进程
+    std::fs::read_dir("/proc").map(|rd| rd.flatten().filter(|e| {
+        e.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit())
+    }).count() as u64).unwrap_or(0)
+}
+
 // ---------- 监控 / 文件系统 ----------
 fn cpu_pct() -> f64 {
     // 读 /proc/stat 两次（间隔 200ms）算 CPU 占用
@@ -223,12 +238,12 @@ fn safe_fs_path(path: &str) -> Option<String> {
     None
 }
 
-fn fs_list(path: &str) -> Vec<serde_json::Value> {
+fn fs_list(path: &str, show_hidden: bool) -> Vec<serde_json::Value> {
     let mut v = Vec::new();
     if let Ok(rd) = std::fs::read_dir(path) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') { continue; } // 默认隐藏
+            if !show_hidden && name.starts_with('.') { continue; } // 默认隐藏
             let is_dir = e.path().is_dir();
             let size = if is_dir { 0 } else { e.metadata().map(|m| m.len()).unwrap_or(0) };
             let mtime = e.metadata().ok()
@@ -312,8 +327,8 @@ fn handle_req(mut req: tiny_http::Request) {
             let act = v["action"].as_str().unwrap_or("").to_string();
             if unit.is_empty() || act.is_empty() {
                 json_resp(json!({"ok": false, "err": "unit/action 缺"}))
-            } else if !matches!(act.as_str(), "start" | "stop" | "restart") {
-                json_resp(json!({"ok": false, "err": "action 必须 start/stop/restart"}))
+            } else if !matches!(act.as_str(), "start" | "stop" | "restart" | "enable" | "disable") {
+                json_resp(json!({"ok": false, "err": "action 必须 start/stop/restart/enable/disable"}))
             } else if !unit_whitelisted(&unit) {
                 json_resp(json!({"ok": false, "err": "unit 不在应用目录"}))
             } else {
@@ -331,6 +346,9 @@ fn handle_req(mut req: tiny_http::Request) {
                 "load1": l1, "load5": l5, "load15": l15,
                 "uptime_sec": up,
                 "arch": std::env::consts::ARCH,
+                "hostname": hostname(),
+                "kernel": kernel(),
+                "procs": proc_count(),
             }))
         } else if method == tiny_http::Method::Get && url == "/api/status" {
             let (mt, ma) = mem_mb();
@@ -352,6 +370,7 @@ fn handle_req(mut req: tiny_http::Request) {
                 .unwrap_or_else(|| "/".to_string());
             let path = urldecode(&path);
             let path = if path.is_empty() { String::from("/") } else { path };
+            let show_hidden = q.split('&').any(|p| p == "show_hidden=1" || p == "show_hidden=true");
             // 路径防护：canonicalize + 白名单
             match safe_fs_path(&path) {
                 Some(safe) => {
@@ -361,7 +380,7 @@ fn handle_req(mut req: tiny_http::Request) {
                         (if idx == 0 { String::from("/") } else { p[..idx].to_string() }, p[idx..].trim_start_matches('/').to_string())
                     };
                     let cur = safe.clone();
-                    json_resp(json!({"path": cur, "parent": parent, "base": base, "items": fs_list(&cur)}))
+                    json_resp(json!({"path": cur, "parent": parent, "base": base, "items": fs_list(&cur, show_hidden)}))
                 }
                 None => json_resp(json!({"error": "路径不允许", "path": path, "items": []})),
             }
