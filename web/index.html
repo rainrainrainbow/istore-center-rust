@@ -155,7 +155,19 @@
 
     <!-- ===== 应用商店 ===== -->
     <div id="view-apps" class="view" style="display:none">
+      <div class="apps-toolbar">
+        <div class="apps-search">
+          <svg viewBox="0 0 24 24" width="15" fill="none" stroke="#555" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input id="apps-search" placeholder="搜索应用名 / 描述 / 标签…">
+        </div>
+        <div class="apps-cats" id="apps-cats"></div>
+      </div>
       <div class="cards" id="app-cards"></div>
+    </div>
+
+    <!-- ===== 应用详情弹窗 ===== -->
+    <div id="app-modal" class="modal" style="display:none">
+      <div class="modal-box" id="app-modal-box"></div>
     </div>
 
     <!-- ===== 监控 ===== -->
@@ -185,6 +197,7 @@
       <div class="widget">
         <div class="w-head">
           <h2><svg viewBox="0 0 24 24" fill="none" stroke="#2b2f38" stroke-width="2"><path d="M4 9a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9Z"/><path d="M9 4h6v4H9z"/></svg>文件浏览</h2>
+          <label class="toggle"><input type="checkbox" id="fs-show-hidden"><span>显示隐藏</span></label>
           <button class="btn" onclick="renderFiles('/')"><svg viewBox="0 0 24 24" fill="none" stroke="#4a4f5a" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>根目录</button>
         </div>
         <div id="fs-body"></div>
