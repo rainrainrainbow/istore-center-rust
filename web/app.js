@@ -59,8 +59,8 @@ $('#nav-search').addEventListener('input', function() {
 
 // 应用商店搜索 + 分类
 $('#apps-search').addEventListener('input', function() { appsQuery = this.value.trim(); renderApps(); });
-// 显示隐藏文件开关
-$('#fs-show-hidden').addEventListener('change', function() { renderFiles('/'); });
+// 显示隐藏文件开关（原地刷新当前目录）
+$('#fs-show-hidden').addEventListener('change', function() { renderFiles(curFsPath); });
 // 弹窗点击遮罩关闭
 $('#app-modal').addEventListener('click', (e) => { if (e.target === e.currentTarget) $('#app-modal').style.display = 'none'; });
 
@@ -297,7 +297,9 @@ function renderMonitorCards(s) {
 }
 
 // ================= 文件浏览器 =================
+let curFsPath = '/'; // 记住当前目录，切换"显示隐藏"时原地刷新
 async function renderFiles(path) {
+  curFsPath = path || '/';
   const el = $('#fs-body'); if (!el) return;
   el.innerHTML = '<div class="muted">加载中…</div>';
   const showHidden = ($('#fs-show-hidden') && $('#fs-show-hidden').checked) ? true : false;
