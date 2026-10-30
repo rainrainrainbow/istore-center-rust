@@ -40,7 +40,7 @@ fn catalog() -> Vec<App> {
     ]
 }
 
-// 运行 shell 命令并返回 (exit_ok, stdout)。
+// 运行 shell 命令并返回 (exit_ok, stdout)。仅限内部固定字符串（df/ip），不拼接外部输入。
 fn run_cmd(cmd: &str) -> (bool, String) {
     match Command::new("/bin/sh").arg("-c").arg(cmd).output() {
         Ok(o) => {
@@ -50,6 +50,24 @@ fn run_cmd(cmd: &str) -> (bool, String) {
         }
         Err(e) => (false, e.to_string()),
     }
+}
+
+// 参数化执行 systemctl（无 shell），杜绝注入。
+fn run_systemctl(act: &str, unit: &str) -> (bool, String) {
+    match Command::new("systemctl").arg("--user").arg(act).arg(unit).output() {
+        Ok(o) => {
+            let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            (o.status.success(), if out.is_empty() { err } else { out })
+        }
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+// unit 必须在应用目录中（白名单），且形如 xxx.service。
+fn unit_whitelisted(unit: &str) -> bool {
+    if !unit.ends_with(".service") || unit.contains(';') || unit.contains('&') || unit.contains('|') || unit.contains('`') { return false; }
+    catalog().iter().any(|a| a.unit == unit)
 }
 
 fn unit_status(unit: &str) -> String {
@@ -176,6 +194,7 @@ fn urldecode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
+        if b[i] == b'+' { out.push(b' '); i += 1; continue; }
         if b[i] == b'%' && i + 2 < b.len() {
             if let (Ok(h), Ok(l)) = (hex(b[i+1]), hex(b[i+2])) {
                 out.push((h << 4) | l); i += 3; continue;
@@ -187,6 +206,21 @@ fn urldecode(s: &str) -> String {
 }
 fn hex(c: u8) -> Result<u8, ()> {
     match c { b'0'..=b'9' => Ok(c - b'0'), b'a'..=b'f' => Ok(c - b'a' + 10), b'A'..=b'F' => Ok(c - b'A' + 10), _ => Err(()) }
+}
+
+// 路径防护：canonicalize + 禁伪文件系统 + 允许根，返回安全路径。
+fn safe_fs_path(path: &str) -> Option<String> {
+    let canon = std::fs::canonicalize(path).ok()?;
+    let s = canon.to_string_lossy().into_owned();
+    // 禁敏感/伪文件系统
+    for bad in ["/proc", "/sys", "/dev", "/run", "/boot/efi"] {
+        if s == bad || s.starts_with(&format!("{}/", bad)) { return None; }
+    }
+    // 允许根
+    let roots = ["/root", "/mnt", "/home", "/boot", "/var", "/opt", "/usr", "/tmp", "/etc"];
+    if s == "/" { return Some(s); }
+    if roots.iter().any(|r| s == *r || s.starts_with(&format!("{}/", r))) { return Some(s); }
+    None
 }
 
 fn fs_list(path: &str) -> Vec<serde_json::Value> {
@@ -227,16 +261,25 @@ fn text_resp(ct: &str, s: String) -> Response<std::io::Cursor<Vec<u8>>> {
 
 fn main() {
     let port: u16 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(8086);
-    let server = Server::http(("0.0.0.0", port)).expect("bind 失败");
+    let server = match Server::http(("0.0.0.0", port)) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("绑定端口 {} 失败: {}", port, e); std::process::exit(1); }
+    };
     eprintln!("istore-center listening on :{}", port);
 
-    for mut req in server.incoming_requests() {
-        let url = req.url().to_string();
-        let method = req.method().clone();
-        let mut body = String::new();
-        let _ = req.as_reader().read_to_string(&mut body);
+    // 每请求一线程，避免慢请求（cpu_pct 采样/子进程）阻塞全部
+    for req in server.incoming_requests() {
+        std::thread::spawn(move || handle_req(req));
+    }
+}
 
-        let resp = if method == tiny_http::Method::Get && url == "/" {
+fn handle_req(mut req: tiny_http::Request) {
+    let url = req.url().to_string();
+    let method = req.method().clone();
+    let mut body = String::new();
+    let _ = req.as_reader().take(65536).read_to_string(&mut body); // 上限 64KB 防 DoS
+
+    let resp = if method == tiny_http::Method::Get && url == "/" {
             text_resp("text/html; charset=utf-8", INDEX_HTML.to_string())
         } else if method == tiny_http::Method::Get && url == "/app.js" {
             text_resp("application/javascript; charset=utf-8", APP_JS.to_string())
@@ -258,6 +301,12 @@ fn main() {
             }).collect();
             json_resp(json!({"apps": apps}))
         } else if method == tiny_http::Method::Post && url == "/api/action" {
+            // CSRF 防护：跨源 POST 拒绝（无 Origin/Referer 视为本机）
+            let origin = req.headers().iter().find(|h| h.field.equiv("Origin") || h.field.equiv("Referer"))
+                .map(|h| h.value.as_str().to_string()).unwrap_or_default();
+            if !origin.is_empty() && !origin.contains("127.0.0.1") && !origin.contains("localhost") && !origin.contains("192.168.2.164") && !origin.contains("100.122.70.99") {
+                json_resp(json!({"ok": false, "err": "跨源请求拒绝"}))
+            } else {
             let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({}));
             let unit = v["unit"].as_str().unwrap_or("").to_string();
             let act = v["action"].as_str().unwrap_or("").to_string();
@@ -265,9 +314,12 @@ fn main() {
                 json_resp(json!({"ok": false, "err": "unit/action 缺"}))
             } else if !matches!(act.as_str(), "start" | "stop" | "restart") {
                 json_resp(json!({"ok": false, "err": "action 必须 start/stop/restart"}))
+            } else if !unit_whitelisted(&unit) {
+                json_resp(json!({"ok": false, "err": "unit 不在应用目录"}))
             } else {
-                let (ok, out) = run_cmd(&format!("systemctl --user {} {}", act, unit));
+                let (ok, out) = run_systemctl(&act, &unit);
                 json_resp(json!({"ok": ok, "output": out}))
+            }
             }
         } else if method == tiny_http::Method::Get && url == "/api/system" {
             let (mt, ma) = mem_mb();
@@ -275,7 +327,7 @@ fn main() {
             let up = uptime_sec();
             json_resp(json!({
                 "mem_total_mb": mt, "mem_avail_mb": ma,
-                "mem_pct": if mt > 0 { (100.0 * (mt - ma) as f64 / mt as f64) } else { 0.0 },
+                "mem_pct": if mt > 0 { (100.0 * (mt - ma) as f64 / mt as f64).clamp(0.0, 100.0) } else { 0.0 },
                 "load1": l1, "load5": l5, "load15": l15,
                 "uptime_sec": up,
                 "arch": std::env::consts::ARCH,
@@ -286,7 +338,7 @@ fn main() {
             json_resp(json!({
                 "cpu_pct": cpu_pct(), "temp_c": temp_c(),
                 "mem_total_mb": mt, "mem_avail_mb": ma,
-                "mem_pct": if mt > 0 { (100.0 * (mt - ma) as f64 / mt as f64) } else { 0.0 },
+                "mem_pct": if mt > 0 { (100.0 * (mt - ma) as f64 / mt as f64).clamp(0.0, 100.0) } else { 0.0 },
                 "net_rx": rx, "net_tx": tx,
                 "load1": loadavg().0, "uptime_sec": uptime_sec(),
                 "ips": lan_ips(),
@@ -299,16 +351,22 @@ fn main() {
             let path = q.split('&').find(|p| p.starts_with("path=")).map(|p| p[5..].to_string())
                 .unwrap_or_else(|| "/".to_string());
             let path = urldecode(&path);
-            let (parent, base) = if path == "/" { (String::from("/"), String::from("/")) } else {
-                let p = path.trim_end_matches('/').to_string();
-                let idx = p.rfind('/').map(|i| i).unwrap_or(0);
-                (if idx == 0 { String::from("/") } else { p[..idx].to_string() }, p[idx..].trim_start_matches('/').to_string())
-            };
-            let cur = if path.is_empty() { String::from("/") } else { path.clone() };
-            json_resp(json!({"path": cur, "parent": parent, "base": base, "items": fs_list(&cur)}))
+            let path = if path.is_empty() { String::from("/") } else { path };
+            // 路径防护：canonicalize + 白名单
+            match safe_fs_path(&path) {
+                Some(safe) => {
+                    let (parent, base) = if safe == "/" { (String::from("/"), String::from("/")) } else {
+                        let p = safe.trim_end_matches('/').to_string();
+                        let idx = p.rfind('/').map(|i| i).unwrap_or(0);
+                        (if idx == 0 { String::from("/") } else { p[..idx].to_string() }, p[idx..].trim_start_matches('/').to_string())
+                    };
+                    let cur = safe.clone();
+                    json_resp(json!({"path": cur, "parent": parent, "base": base, "items": fs_list(&cur)}))
+                }
+                None => json_resp(json!({"error": "路径不允许", "path": path, "items": []})),
+            }
         } else {
             text_resp("text/plain; charset=utf-8", "404".to_string())
         };
-        let _ = req.respond(resp);
-    }
+    let _ = req.respond(resp);
 }
