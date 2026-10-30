@@ -196,7 +196,8 @@ fn fs_list(path: &str) -> Vec<serde_json::Value> {
             if name.starts_with('.') { continue; } // 默认隐藏
             let is_dir = e.path().is_dir();
             let size = if is_dir { 0 } else { e.metadata().map(|m| m.len()).unwrap_or(0) };
-            let mtime = e.metadata().and_then(|m| m.modified().ok())
+            let mtime = e.metadata().ok()
+                .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as u64).unwrap_or(0);
             v.push(json!({"name": name, "is_dir": is_dir, "size": size, "mtime": mtime}));
