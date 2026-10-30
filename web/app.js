@@ -57,6 +57,13 @@ $('#nav-search').addEventListener('input', function() {
   });
 });
 
+// 应用商店搜索 + 分类
+$('#apps-search').addEventListener('input', function() { appsQuery = this.value.trim(); renderApps(); });
+// 显示隐藏文件开关
+$('#fs-show-hidden').addEventListener('change', function() { renderFiles('/'); });
+// 弹窗点击遮罩关闭
+$('#app-modal').addEventListener('click', (e) => { if (e.target === e.currentTarget) $('#app-modal').style.display = 'none'; });
+
 // ================= 首页仪表盘 =================
 let homeData = [];
 async function loadHome() {
@@ -159,17 +166,32 @@ function drawChart(sel, data) {
 
 // ================= 应用商店 =================
 let ALL = [];
+let appsQuery = '';
+let appsCat = '';
 async function loadApps() {
   try {
     const r = await fetch('/api/apps'); const d = await r.json();
     ALL = d.apps || [];
   } catch (e) { toast('加载应用失败'); }
+  renderCatChips();
   renderApps();
+}
+function renderCatChips() {
+  const el = $('#apps-cats'); if (!el) return;
+  const cats = ['全部', ...new Set(ALL.map(a => a.category).filter(Boolean))];
+  el.innerHTML = cats.map(c => `<button class="cat-chip ${c===appsCat?'on':''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
+  el.querySelectorAll('.cat-chip').forEach(b => b.onclick = () => { appsCat = b.dataset.cat; renderCatChips(); renderApps(); });
 }
 function renderApps() {
   const el = $('#app-cards'); if (!el) return;
-  if (!ALL.length) { el.innerHTML = '<div class="empty">没有应用</div>'; return; }
-  el.innerHTML = ALL.map(a => {
+  let list = ALL;
+  if (appsCat && appsCat !== '全部') list = list.filter(a => a.category === appsCat);
+  if (appsQuery) {
+    const q = appsQuery.toLowerCase();
+    list = list.filter(a => (a.name + ' ' + a.desc + ' ' + (a.tags||[]).join(' ')).toLowerCase().includes(q));
+  }
+  if (!list.length) { el.innerHTML = '<div class="empty">没有匹配的应用</div>'; return; }
+  el.innerHTML = list.map(a => {
     const on = a.status === 'active' || a.status === 'running';
     const tags = (a.tags||[]).map(t => `<span class="tag">${esc(t)}</span>`).join('');
     const btn = a.unit
@@ -177,7 +199,7 @@ function renderApps() {
           ? `<button class="act" data-act="restart" data-unit="${esc(a.unit)}">重启</button><button class="act" data-act="stop" data-unit="${esc(a.unit)}">停止</button>`
           : `<button class="act primary" data-act="start" data-unit="${esc(a.unit)}">启动</button>`)
       : '';
-    return `<div class="app-card">
+    return `<div class="app-card" data-id="${esc(a.id)}">
       <div class="head">
         <div class="icon" style="background:#f0ebff">${esc(a.icon)}</div>
         <div>
@@ -195,27 +217,76 @@ function renderApps() {
       </div>
     </div>`;
   }).join('');
-  el.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => doAction(b));
+  el.querySelectorAll('.app-card').forEach(c => c.onclick = (e) => {
+    if (e.target.closest('button')) return; // 按钮点击不弹详情
+    openDetail(c.dataset.id);
+  });
+  el.querySelectorAll('button[data-act]').forEach(b => b.onclick = (e) => { e.stopPropagation(); doAction(b); });
 }
-async function doAction(btn) {
+function openDetail(id) {
+  const a = ALL.find(x => x.id === id); if (!a) return;
+  const on = a.status === 'active' || a.status === 'running';
+  const box = $('#app-modal-box');
+  box.innerHTML = `
+    <div class="modal-head">
+      <div class="icon" style="background:#f0ebff">${esc(a.icon)}</div>
+      <div>
+        <div class="title">${esc(a.name)} <span class="ver">v${esc(a.version)}</span></div>
+        <div class="meta">${esc(a.category||'未分类')} · ${esc(a.author)}</div>
+      </div>
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div class="modal-desc">${esc(a.desc)}</div>
+    <div class="modal-body">
+      <div class="kv"><span class="k">版本</span><span class="v">v${esc(a.version)}</span></div>
+      <div class="kv"><span class="k">作者</span><span class="v">${esc(a.author)}</span></div>
+      <div class="kv"><span class="k">分类</span><span class="v">${esc(a.category||'--')}</span></div>
+      <div class="kv"><span class="k">端口</span><span class="v">${a.port?esc(a.port):'--'}</span></div>
+      <div class="kv"><span class="k">标签</span><span class="v">${(a.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ')||'--'}</span></div>
+      <div class="kv"><span class="k">运行状态</span><span class="v"><span class="badge-s ${on?'ok':'off'}">${on?'● 运行中':'○ 已停止'}</span></span></div>
+      <div class="kv"><span class="k">开机自启</span><span class="v"><span class="badge-s ${a.enabled?'ok':'off'}">${a.enabled?'已启用':'已禁用'}</span></span></div>
+      <div class="kv"><span class="k">systemd 单元</span><span class="v" style="font-size:11px">${esc(a.unit||'无')}</span></div>
+    </div>
+    <div class="modal-actions">
+      ${a.unit?`<button class="act" data-act="disable" data-unit="${esc(a.unit)}">禁用自启</button>
+      <button class="act" data-act="enable" data-unit="${esc(a.unit)}">启用自启</button>
+      ${on?`<button class="act" data-act="restart" data-unit="${esc(a.unit)}">重启</button><button class="act" data-act="stop" data-unit="${esc(a.unit)}">停止</button>`:`<button class="act primary" data-act="start" data-unit="${esc(a.unit)}">启动</button>`}`:''}
+    </div>`;
+  $('#app-modal').style.display = 'flex';
+  box.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $('#app-modal').style.display = 'none');
+  box.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => doAction(b, true));
+}
+async function doAction(btn, keepOpen) {
   const unit = btn.dataset.unit, act = btn.dataset.act;
   btn.disabled = true; btn.textContent = '执行中…';
   try {
     const r = await fetch('/api/action', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({unit, action: act}) });
     const d = await r.json();
-    toast(d.ok ? `已${act==='start'?'启动':act==='stop'?'停止':'重启'} ${unit}` : `操作失败: ${d.err||d.output||''}`);
-  } catch (e) { toast('请求失败'); }
-  btn.disabled = false; btn.textContent = act === 'start' ? '启动' : (act === 'stop' ? '停止' : '重启');
+    const map = {start:'启动', stop:'停止', restart:'重启', enable:'启用自启', disable:'禁用自启'};
+    toast(d.ok ? `已${map[act]||act} ${unit}` : `操作失败: ${d.err||d.output||''}`);
+    if (!d.ok) { btn.disabled = false; btn.textContent = map[act]||act; }
+  } catch (e) { toast('请求失败'); btn.disabled = false; }
   await loadApps();
+  if (keepOpen) { const a = ALL.find(x => x.id === unit.split('.')[0]); if (a) openDetail(a.id); }
 }
 
 // ================= 监控视图 =================
+function tempGauge(tempC) {
+  // 温度专用：0-100℃ 归一化，缺失显示 --
+  const t = (tempC || 0);
+  const pct = Math.max(0, Math.min(100, t));
+  const color = t >= 70 ? '#ef5a24' : (t >= 50 ? '#f5a524' : '#22c55e');
+  const disp = t > 0 ? t.toFixed(0)+'℃' : '--';
+  return `<div class="temp-gauge" title="温度">
+    <div class="temp-val">${disp}</div>
+    <div class="temp-bar"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+    <span>温度</span></div>`;
+}
 function renderMonitorCards(s) {
   const dEl = $('#sys-donuts'); if (!dEl) return;
-  const tempDisp = s.temp_c > 0 ? s.temp_c.toFixed(0)+'℃' : '--';
   dEl.innerHTML = `
     <div class="donut-item">${donut(s.cpu_pct, '#5b6ef5')}<span>CPU</span></div>
-    <div class="donut-item">${donut(Math.min(s.temp_c,100), '#22c55e', tempDisp)}<span>温度</span></div>
+    ${tempGauge(s.temp_c)}
     <div class="donut-item">${donut(s.mem_pct, '#8b5cf6')}<span>内存</span></div>`;
   const dl = $('#disk-list'); if (dl) dl.innerHTML = (s.drives||[]).map(d => `
     <div class="disk-row">
@@ -229,12 +300,13 @@ function renderMonitorCards(s) {
 async function renderFiles(path) {
   const el = $('#fs-body'); if (!el) return;
   el.innerHTML = '<div class="muted">加载中…</div>';
+  const showHidden = ($('#fs-show-hidden') && $('#fs-show-hidden').checked) ? true : false;
   let drives = [];
   try { drives = (await (await fetch('/api/drives')).json()).drives || []; } catch (e) {}
   let data = { path:'/', parent:'/', items:[] };
   let fsErr = null;
   try {
-    data = await (await fetch('/api/fs?path=' + encodeURIComponent(path))).json();
+    data = await (await fetch('/api/fs?path=' + encodeURIComponent(path) + (showHidden?'&show_hidden=1':''))).json();
     if (data.error) fsErr = data.error;
   } catch (e) { fsErr = '加载失败：' + (e.message || e); }
   if (fsErr) {
@@ -284,10 +356,15 @@ async function renderSystem() {
   try {
     const r = await fetch('/api/system'); const s = await r.json();
     el.innerHTML = `
-      <div class="kv"><span class="k">内存</span><span class="v">${s.mem_avail_mb} / ${s.mem_total_mb} MB (${s.mem_pct.toFixed(0)}%)</span></div>
-      <div class="kv"><span class="k">负载 1/5/15</span><span class="v">${s.load1.toFixed(1)} / ${s.load5.toFixed(1)} / ${s.load15.toFixed(1)}</span></div>
-      <div class="kv"><span class="k">运行时长</span><span class="v">${fmtUp(s.uptime_sec)}</span></div>
-      <div class="kv"><span class="k">架构</span><span class="v">${esc(s.arch)}</span></div>`;
+      <div class="sys-grid">
+        <div class="sys-tile"><b>${esc(s.hostname||'--')}</b><span>主机名</span></div>
+        <div class="sys-tile"><b>${esc(s.kernel||'--')}</b><span>内核</span></div>
+        <div class="sys-tile"><b>${s.procs||0}</b><span>进程数</span></div>
+        <div class="sys-tile"><b>${fmtUp(s.uptime_sec)}</b><span>运行时长</span></div>
+        <div class="sys-tile"><b>${s.mem_avail_mb} / ${s.mem_total_mb} MB</b><span>内存 (${s.mem_pct.toFixed(0)}%)</span></div>
+        <div class="sys-tile"><b>${s.load1.toFixed(1)} / ${s.load5.toFixed(1)} / ${s.load15.toFixed(1)}</b><span>负载 1/5/15</span></div>
+        <div class="sys-tile"><b>${esc(s.arch)}</b><span>架构</span></div>
+      </div>`;
   } catch (e) { el.innerHTML = '<div class="muted">获取失败</div>'; }
 }
 function renderAbout() {
