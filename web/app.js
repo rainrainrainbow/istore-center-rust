@@ -1,149 +1,103 @@
-// istore-center app.js — iStore 风格软件中心前端
-let ALL = [];
-let CATS = [];
-let curTab = 'all';
-let SYS = null;
-
+// hanhua 控制台 app.js — 基于 iStoreOS 首页模板自建
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), 2200);
+  const t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#2b2f38;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:99;box-shadow:0 6px 20px rgba(0,0,0,.2)';
+  t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2400);
 }
 
-function fmtUp(sec) {
-  if (!sec) return '-';
-  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
-  return (d ? d + '天' : '') + (h ? h + '时' : '') + m + '分';
-}
-
-async function loadSystem() {
-  try {
-    const r = await fetch('/api/system'); SYS = await r.json();
-  } catch (e) { SYS = null; }
-  renderSystem();
-}
-
-function renderSystem() {
-  const el = $('#content');
-  const s = SYS;
-  let html = '<div class="sysrow">';
-  if (s) {
-    html += `<div class="syscard"><div class="k">内存</div><div class="v">${s.mem_avail_mb} <small>/ ${s.mem_total_mb} MB</small></div></div>`;
-    html += `<div class="syscard"><div class="k">内存占用</div><div class="v">${s.mem_pct.toFixed(0)}<small>%</small></div></div>`;
-    html += `<div class="syscard"><div class="k">负载 1/5/15</div><div class="v">${s.load1.toFixed(1)} <small>${s.load5.toFixed(1)} / ${s.load15.toFixed(1)}</small></div></div>`;
-    html += `<div class="syscard"><div class="k">运行时长</div><div class="v">${fmtUp(s.uptime_sec)}</div></div>`;
-    html += `<div class="syscard"><div class="k">架构</div><div class="v">${esc(s.arch)}</div></div>`;
-  }
-  html += '</div>';
-  return html;
-}
-
-async function loadApps() {
-  try {
-    const r = await fetch('/api/apps'); const d = await r.json();
-    ALL = d.apps || [];
-    CATS = [...new Set(ALL.map(a => a.category))];
-    const tabs = $('#tabs');
-    let th = `<span class="tab ${curTab==='all'?'active':''}" data-tab="all">全部 ${ALL.length}</span>`;
-    th += `<span class="tab ${curTab==='on'?'active':''}" data-tab="on">已安装</span>`;
-    th += `<span class="tab ${curTab==='off'?'active':''}" data-tab="off">未安装</span>`;
-    CATS.forEach(c => { th += `<span class="tab ${curTab===c?'active':''}" data-tab="${esc(c)}">${esc(c)}</span>`; });
-    tabs.innerHTML = th;
-    tabs.querySelectorAll('.tab').forEach(t => t.onclick = () => { curTab = t.dataset.tab; render(); });
-  } catch (e) { toast('加载应用失败'); }
-  render();
-}
-
-function visible() {
-  if (curTab === 'all') return ALL;
-  if (curTab === 'on') return ALL.filter(a => a.status === 'active' || a.status === 'running');
-  if (curTab === 'off') return ALL.filter(a => a.status !== 'active' && a.status !== 'running');
-  return ALL.filter(a => a.category === curTab);
-}
-
-function statusBadge(a) {
-  const on = a.status === 'active' || a.status === 'running';
-  return `<span class="badge ${on?'ok':'off'}">${on?'● 运行中':'○ 已停止'}</span>`;
-}
-
-function render() {
-  const el = $('#content');
-  const sys = renderSystem();
-  const list = visible();
-  if (!list.length) { el.innerHTML = sys + '<div class="empty">没有匹配的应用</div>'; return; }
-  let html = list.map(a => {
-    const on = a.status === 'active' || a.status === 'running';
-    const tags = (a.tags||[]).map(t => `<span class="tag">${esc(t)}</span>`).join('');
-    const btn = a.unit
-      ? (on
-          ? `<button class="btn btn-soft" data-act="restart" data-unit="${esc(a.unit)}">重启</button><button class="btn btn-soft" data-act="stop" data-unit="${esc(a.unit)}">停止</button>`
-          : `<button class="btn btn-primary" data-act="start" data-unit="${esc(a.unit)}">启动</button>`)
-      : `<span class="hint" style="font-size:12px;color:#888">端口探测</span>`;
-    return `<div class="card">
-      <div class="head">
-        <div class="icon">${esc(a.icon)}</div>
-        <div>
-          <div class="title">${esc(a.name)} <span class="ver">v${esc(a.version)}</span> ${statusBadge(a)}</div>
-          <div class="meta">作者:${esc(a.author)}${a.port?` · 端口:${a.port}${a.port_ok?' <span style="color:#27ae60">●</span>':' <span style="color:#e74c3c">○</span>'}`:''}</div>
-        </div>
-      </div>
-      <div class="desc">${esc(a.desc)}</div>
-      <div class="foot"><div class="tags">${tags}</div><div class="actions">${btn}</div></div>
-    </div>`;
-  }).join('');
-  el.innerHTML = sys + `<div class="grid">${html}</div>`;
-  el.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => doAction(b));
-}
-
-async function doAction(btn) {
-  const unit = btn.dataset.unit, act = btn.dataset.act;
-  btn.disabled = true; btn.textContent = '执行中…';
-  try {
-    const r = await fetch('/api/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({unit, action: act}) });
-    const d = await r.json();
-    toast(d.ok ? `已${act==='start'?'启动':act==='stop'?'停止':'重启'} ${unit}` : (`操作失败: ${d.err||d.output||''}`));
-  } catch (e) { toast('请求失败'); }
-  btn.disabled = false; btn.textContent = act === 'start' ? '启动' : (act === 'stop' ? '停止' : '重启');
-  await loadApps();
-}
-
-// 视图切换（应用商店 / 监控 / 文件 / 关于）
-let monTimer = null, monData = [];
-document.querySelectorAll('.menu a').forEach(a => a.onclick = () => {
-  document.querySelectorAll('.menu a').forEach(x => x.classList.remove('active'));
-  a.classList.add('active');
-  const v = a.dataset.view;
-  if (v === 'apps') { $('#view-title').textContent = '应用商店'; $('#view-sub').textContent = '本机服务管理'; stopMonitor(); loadApps(); }
-  else if (v === 'monitor') { $('#view-title').textContent = '监控'; $('#view-sub').textContent = '实时状态'; renderMonitor(); startMonitor(); }
-  else if (v === 'files') { $('#view-title').textContent = '文件'; $('#view-sub').textContent = '文件浏览器'; stopMonitor(); renderFiles('/'); }
-  else { $('#view-title').textContent = '关于'; $('#view-sub').textContent = 'iStore 软件中心'; stopMonitor(); renderAbout(); }
-});
-
-// ---------- 监控面板 ----------
 function fmtBytes(b) {
   if (b >= 1073741824) return (b/1073741824).toFixed(1)+' GB';
   if (b >= 1048576) return (b/1048576).toFixed(1)+' MB';
   if (b >= 1024) return (b/1024).toFixed(1)+' KB';
-  return b+' B';
+  return (b||0)+' B';
 }
 function fmtRate(bps) {
   if (bps >= 1048576) return (bps/1048576).toFixed(1)+' MB/s';
   if (bps >= 1024) return (bps/1024).toFixed(1)+' KB/s';
-  return bps.toFixed(1)+' B/s';
+  return (bps||0).toFixed(1)+' B/s';
+}
+function fmtUp(sec) {
+  if (!sec) return '--';
+  const d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60), s = Math.floor(sec%60);
+  return (d?d+'天':'')+h+'时'+m+'分'+s+'秒';
 }
 function donut(pct, color, display) {
   pct = Math.min(100, Math.max(0, pct));
-  const center = display !== undefined ? display : pct.toFixed(0) + '%';
+  const center = display !== undefined ? display : pct.toFixed(0)+'%';
   return `<div class="donut" style="background:conic-gradient(${color} ${pct*3.6}deg, #ececec ${pct*3.6}deg)"><div class="donut-hole"><b>${center}</b></div></div>`;
 }
 
-let lastNet = null;
-async function pollMonitor() {
+// ================= 视图切换 =================
+let monTimer = null;
+function showView(v) {
+  document.querySelectorAll('#nav a').forEach(x => x.classList.toggle('active', x.dataset.view === v));
+  document.querySelectorAll('.view').forEach(x => x.style.display = 'none');
+  const el = $('#view-' + v); if (el) el.style.display = 'block';
+  const sub = {home:'本机控制台', apps:'本机服务管理', monitor:'实时状态', files:'文件浏览器', system:'架构 / 负载 / 运行时长', about:'关于 hanhua', logout:'退出'}[v] || '';
+  $('#view-sub').textContent = sub;
+  if (v === 'monitor') { startMonitor(); }
+  else { stopMonitor(); }
+  if (v === 'apps') loadApps();
+  else if (v === 'files') renderFiles('/');
+  else if (v === 'system') renderSystem();
+  else if (v === 'home') loadHome();
+  else if (v === 'about') renderAbout();
+}
+
+// 菜单点击 + 搜索过滤
+document.querySelectorAll('#nav a').forEach(a => a.onclick = (e) => { e.preventDefault(); showView(a.dataset.view); });
+$('#nav-search').addEventListener('input', function() {
+  const q = this.value.trim().toLowerCase();
+  document.querySelectorAll('#nav a').forEach(a => {
+    a.style.display = !q || a.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+});
+
+// ================= 首页仪表盘 =================
+let homeData = [];
+async function loadHome() {
+  $('#foot-status').textContent = 'v1.1 · 刷新中…';
   try {
     const r = await fetch('/api/status'); const s = await r.json();
-    // 网络速率 = 差分 / 实际间隔（时间戳）
+    $('#uptime').textContent = fmtUp(s.uptime_sec);
+    const ips = s.ips || [];
+    $('#ip-chips').innerHTML = ips.map(ip => `<button class="chip">${esc(ip)}</button>`).join('') || '<span class="muted">无 IPv4</span>';
+    $('#ip-mask').textContent = ips[0] || '--';
+    // DNS = 网关（首段.1）
+    const gw = ips[0] ? ips[0].split('.').slice(0,3).join('.')+'.1' : '--';
+    $('#dns').textContent = gw;
+    // 网络接口
+    const ifaces = ips.map(ip => {
+      const isLan = ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.');
+      const isTs = ip.startsWith('100.');
+      const name = isTs ? 'tailscale0' : (isLan ? 'wlan0' : 'eth0');
+      return `<div class="iface"><div class="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9h4v11H5z"/><path d="M11 5h4v15h-4z"/></svg></div><div class="meta"><b>${esc(name)}</b><small>${esc(ip)} · 已连接</small></div><span class="tag-ok">已连接</span></div>`;
+    }).join('') || '<div class="muted">无接口</div>';
+    $('#iface-list').innerHTML = ifaces;
+    $('#net-state').textContent = ips.length ? '网络连接正常' : '网络未连接';
+    $('#foot-status').textContent = 'v1.1 · 系统运行正常';
+    // 应用计数
+    try {
+      const ar = await fetch('/api/apps'); const ad = await ar.json();
+      const n = (ad.apps||[]).length;
+      $('#app-count-badge').textContent = n+' 服务';
+      $('#card-app-count').textContent = n+' 服务';
+    } catch(e){}
+  } catch (e) {
+    $('#foot-status').textContent = 'v1.1 · 获取状态失败';
+    $('#net-state').textContent = '连接失败';
+  }
+}
+
+// 实时流量（首页 + 监控共用）
+let netData = [], lastNet = null;
+async function pollNet() {
+  try {
+    const r = await fetch('/api/status'); const s = await r.json();
     const now = Date.now();
     let rxRate = 0, txRate = 0;
     if (lastNet) {
@@ -151,97 +105,140 @@ async function pollMonitor() {
       if (dt > 0) { rxRate = Math.max(0, s.net_rx - lastNet.rx) / dt; txRate = Math.max(0, s.net_tx - lastNet.tx) / dt; }
     }
     lastNet = { rx: s.net_rx, tx: s.net_tx, t: now };
-    monData.push({ rx: rxRate, tx: txRate });
-    if (monData.length > 40) monData.shift();
-    renderMonitorCards(s, rxRate, txRate);
-    drawNetChart();
+    netData.push({ rx: rxRate, tx: txRate });
+    if (netData.length > 40) netData.shift();
+    // 首页
+    const rxEl = $('#net-rx'); if (rxEl) rxEl.textContent = fmtRate(rxRate);
+    const txEl = $('#net-tx'); if (txEl) txEl.textContent = fmtRate(txRate);
+    drawChart('#net-chart', netData);
+    // 监控
+    const mrx = $('#mon-rx'); if (mrx) { mrx.textContent = fmtRate(rxRate); $('#mon-tx').textContent = fmtRate(txRate); }
+    drawChart('#mon-chart', netData);
+    renderMonitorCards(s);
   } catch (e) {}
 }
-function startMonitor() { stopMonitor(); monTimer = setInterval(pollMonitor, 2000); pollMonitor(); }
+function startMonitor() { stopMonitor(); monTimer = setInterval(pollNet, 2000); pollNet(); }
 function stopMonitor() { if (monTimer) { clearInterval(monTimer); monTimer = null; } }
 
-function renderMonitor() {
-  $('#content').innerHTML = `
-    <div class="mon-grid">
-      <div class="mon-card" style="grid-column:1 / -1">
-        <div class="mon-head"><span>网络流量</span><span id="net-vals" class="muted">下载 0 · 上传 0</span></div>
-        <canvas id="net-chart" width="900" height="220"></canvas>
+// SVG 面积图（模板风格）
+function drawChart(sel, data) {
+  const svg = $(sel); if (!svg) return;
+  const W = 800, H = 330;
+  const max = Math.max(10, ...data.map(d => Math.max(d.rx, d.tx)));
+  const n = data.length;
+  const pts = (key) => data.map((d, i) => {
+    const x = W - (n-1-i) * (W / Math.max(n, 1));
+    const y = H - 20 - (d[key]/max) * (H - 60);
+    return [Math.round(x), Math.round(y)];
+  });
+  const areaPath = (key) => {
+    const p = pts(key); if (!p.length) return '';
+    let d = `M${p[0][0]},${p[0][1]}`;
+    for (let i = 1; i < p.length; i++) { const [x,y] = p[i]; const [px,py] = p[i-1]; d += ` C${Math.round((px+x)/2)},${py} ${Math.round((px+x)/2)},${y} ${x},${y}`; }
+    return `${d} L${p[p.length-1][0]},${H-20} L${p[0][0]},${H-20} Z`;
+  };
+  const linePath = (key) => {
+    const p = pts(key); if (!p.length) return '';
+    let d = `M${p[0][0]},${p[0][1]}`;
+    for (let i = 1; i < p.length; i++) { const [x,y] = p[i]; const [px,py] = p[i-1]; d += ` C${Math.round((px+x)/2)},${py} ${Math.round((px+x)/2)},${y} ${x},${y}`; }
+    return d;
+  };
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="gRx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22b6ff" stop-opacity=".55"/><stop offset="1" stop-color="#22b6ff" stop-opacity="0"/></linearGradient>
+      <linearGradient id="gTx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b4bf0" stop-opacity=".5"/><stop offset="1" stop-color="#5b4bf0" stop-opacity="0"/></linearGradient>
+    </defs>
+    <g stroke="#eef0f5" stroke-width="1">
+      <line x1="0" y1="60" x2="800" y2="60"/><line x1="0" y1="150" x2="800" y2="150"/><line x1="0" y1="240" x2="800" y2="240"/>
+    </g>
+    <path d="${areaPath('rx')}" fill="url(#gRx)"/>
+    <path d="${linePath('rx')}" fill="none" stroke="#22b6ff" stroke-width="2.4"/>
+    <path d="${areaPath('tx')}" fill="url(#gTx)"/>
+    <path d="${linePath('tx')}" fill="none" stroke="#5b4bf0" stroke-width="2.4"/>`;
+}
+
+// ================= 应用商店 =================
+let ALL = [];
+async function loadApps() {
+  try {
+    const r = await fetch('/api/apps'); const d = await r.json();
+    ALL = d.apps || [];
+  } catch (e) { toast('加载应用失败'); }
+  renderApps();
+}
+function renderApps() {
+  const el = $('#app-cards'); if (!el) return;
+  if (!ALL.length) { el.innerHTML = '<div class="empty">没有应用</div>'; return; }
+  el.innerHTML = ALL.map(a => {
+    const on = a.status === 'active' || a.status === 'running';
+    const tags = (a.tags||[]).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+    const btn = a.unit
+      ? (on
+          ? `<button class="act" data-act="restart" data-unit="${esc(a.unit)}">重启</button><button class="act" data-act="stop" data-unit="${esc(a.unit)}">停止</button>`
+          : `<button class="act primary" data-act="start" data-unit="${esc(a.unit)}">启动</button>`)
+      : '';
+    return `<div class="app-card">
+      <div class="head">
+        <div class="icon" style="background:#f0ebff">${esc(a.icon)}</div>
+        <div>
+          <div class="title">${esc(a.name)} <span class="ver">v${esc(a.version)}</span></div>
+          <div class="meta">作者:${esc(a.author)}${a.port?` · 端口:${a.port}${a.port_ok?' <span style="color:#3bc47d">●</span>':' <span style="color:#ef5a24">○</span>'}`:''}</div>
+        </div>
       </div>
-      <div class="mon-card">
-        <div class="mon-head">网络连接和IP地址</div>
-        <div id="net-ip" class="mon-body"></div>
-      </div>
-      <div class="mon-card">
-        <div class="mon-head">系统信息</div>
-        <div class="donuts" id="sys-donuts"></div>
-      </div>
-      <div class="mon-card" style="grid-column:1 / -1">
-        <div class="mon-head">磁盘信息</div>
-        <div id="disk-list" class="mon-body"></div>
-      </div>
-      <div class="mon-card">
-        <div class="mon-head">系统时间</div><div class="mon-big" id="sys-time">--</div>
-      </div>
-      <div class="mon-card">
-        <div class="mon-head">已运行</div><div class="mon-big" id="sys-up">--</div>
+      <div class="desc">${esc(a.desc)}</div>
+      <div class="foot">
+        <div class="tags">${tags}</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="badge-s ${on?'ok':'off'}">${on?'● 运行中':'○ 已停止'}</span>
+          <div class="actions">${btn}</div>
+        </div>
       </div>
     </div>`;
+  }).join('');
+  el.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => doAction(b));
 }
-function renderMonitorCards(s, rx, tx) {
-  $('#net-vals').textContent = `下载 ${fmtRate(rx)} · 上传 ${fmtRate(tx)}`;
-  $('#net-ip').innerHTML = (s.ips||[]).map(ip => `<div class="ip-row">🌐 <code>${esc(ip)}</code></div>`).join('') || '<div class="muted">无 IPv4</div>';
-  const tempDisp = s.temp_c > 0 ? s.temp_c.toFixed(0) + '℃' : '--';
-  $('#sys-donuts').innerHTML = `
-    <div class="donut-item">${donut(s.cpu_pct, '#3b82f6')}<span>CPU</span></div>
-    <div class="donut-item">${donut(Math.min(s.temp_c, 100), '#22c55e', tempDisp)}<span>温度</span></div>
+async function doAction(btn) {
+  const unit = btn.dataset.unit, act = btn.dataset.act;
+  btn.disabled = true; btn.textContent = '执行中…';
+  try {
+    const r = await fetch('/api/action', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({unit, action: act}) });
+    const d = await r.json();
+    toast(d.ok ? `已${act==='start'?'启动':act==='stop'?'停止':'重启'} ${unit}` : `操作失败: ${d.err||d.output||''}`);
+  } catch (e) { toast('请求失败'); }
+  btn.disabled = false; btn.textContent = act === 'start' ? '启动' : (act === 'stop' ? '停止' : '重启');
+  await loadApps();
+}
+
+// ================= 监控视图 =================
+function renderMonitorCards(s) {
+  const dEl = $('#sys-donuts'); if (!dEl) return;
+  const tempDisp = s.temp_c > 0 ? s.temp_c.toFixed(0)+'℃' : '--';
+  dEl.innerHTML = `
+    <div class="donut-item">${donut(s.cpu_pct, '#5b6ef5')}<span>CPU</span></div>
+    <div class="donut-item">${donut(Math.min(s.temp_c,100), '#22c55e', tempDisp)}<span>温度</span></div>
     <div class="donut-item">${donut(s.mem_pct, '#8b5cf6')}<span>内存</span></div>`;
-  $('#disk-list').innerHTML = (s.drives||[]).map(d => `
+  const dl = $('#disk-list'); if (dl) dl.innerHTML = (s.drives||[]).map(d => `
     <div class="disk-row">
-      <div class="disk-name"><code>${esc(d.device)}</code><span class="muted">${esc(d.mount)}</span></div>
+      <div class="disk-name"><code>${esc(d.device)}</code><small>${esc(d.mount)}</small></div>
       <div class="bar"><div class="bar-fill ${d.pct>80?'red':''}" style="width:${Math.min(d.pct,100)}%"></div></div>
       <span class="muted">${d.pct}% · ${fmtBytes(d.used)} / ${fmtBytes(d.size)}</span>
     </div>`).join('') || '<div class="muted">无磁盘</div>';
-  const now = new Date();
-  const p = n => String(n).padStart(2,'0');
-  $('#sys-time').textContent = `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
-  $('#sys-up').textContent = fmtUp(s.uptime_sec);
-}
-function drawNetChart() {
-  const c = document.getElementById('net-chart'); if (!c) return;
-  const ctx = c.getContext('2d'); const W = c.width, H = c.height; ctx.clearRect(0,0,W,H);
-  const max = Math.max(10, ...monData.map(d => Math.max(d.rx, d.tx)));
-  const n = monData.length, step = W / Math.max(n, 1);
-  const line = (key, color) => {
-    ctx.beginPath();
-    monData.forEach((d, i) => {
-      const x = W - (n-1-i)*step, y = H - 10 - (d[key]/max)*(H-30);
-      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    });
-    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
-    // 渐变面积
-    ctx.lineTo(W, H-10); ctx.lineTo(W-(n)*step, H-10); ctx.closePath();
-    const g = ctx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, color+'55'); g.addColorStop(1, color+'00');
-    ctx.fillStyle = g; ctx.fill();
-  };
-  line('rx', '#3b82f6'); line('tx', '#22c55e');
 }
 
-// ---------- 文件浏览器 ----------
+// ================= 文件浏览器 =================
 async function renderFiles(path) {
-  stopMonitor();
-  const el = $('#content');
+  const el = $('#fs-body'); if (!el) return;
   el.innerHTML = '<div class="muted">加载中…</div>';
   let drives = [];
   try { drives = (await (await fetch('/api/drives')).json()).drives || []; } catch (e) {}
-  let data = { path: '/', parent: '/', items: [] };
+  let data = { path:'/', parent:'/', items:[] };
   let fsErr = null;
   try {
     data = await (await fetch('/api/fs?path=' + encodeURIComponent(path))).json();
     if (data.error) fsErr = data.error;
   } catch (e) { fsErr = '加载失败：' + (e.message || e); }
   if (fsErr) {
-    el.innerHTML = `<div class="fs-wrap"><div class="fs-main"><div class="empty" style="color:#888;padding:40px">⚠️ ${esc(fsErr)} <button class="fs-btn" style="margin-left:10px" onclick="renderFiles('/')">返回根目录</button></div></div></div>`;
+    el.innerHTML = `<div class="fs-wrap"><div class="fs-main"><div class="empty" style="padding:40px">⚠️ ${esc(fsErr)} <button class="fs-btn" style="margin-left:10px" onclick="renderFiles('/')">返回根目录</button></div></div></div>`;
     return;
   }
   const cur = data.path || path;
@@ -277,19 +274,25 @@ async function renderFiles(path) {
       </div>
     </div>`;
   el.querySelectorAll('[data-p]').forEach(n => n.onclick = () => renderFiles(n.dataset.p));
-  const up = document.getElementById('fs-up'); if (up) up.onclick = () => renderFiles(data.parent || '/');
+  const up = $('#fs-up'); if (up) up.onclick = () => renderFiles(data.parent || '/');
 }
 
+// ================= 系统 / 关于 =================
+async function renderSystem() {
+  const el = $('#sys-info'); if (!el) return;
+  el.innerHTML = '<div class="muted">加载中…</div>';
+  try {
+    const r = await fetch('/api/system'); const s = await r.json();
+    el.innerHTML = `
+      <div class="kv"><span class="k">内存</span><span class="v">${s.mem_avail_mb} / ${s.mem_total_mb} MB (${s.mem_pct.toFixed(0)}%)</span></div>
+      <div class="kv"><span class="k">负载 1/5/15</span><span class="v">${s.load1.toFixed(1)} / ${s.load5.toFixed(1)} / ${s.load15.toFixed(1)}</span></div>
+      <div class="kv"><span class="k">运行时长</span><span class="v">${fmtUp(s.uptime_sec)}</span></div>
+      <div class="kv"><span class="k">架构</span><span class="v">${esc(s.arch)}</span></div>`;
+  } catch (e) { el.innerHTML = '<div class="muted">获取失败</div>'; }
+}
 function renderAbout() {
-  const el = $('#content');
-  el.innerHTML = `${renderSystem()}<div class="card" style="max-width:520px">
-    <div class="head"><div class="icon">🏪</div><div>
-      <div class="title">应用商店 <span class="ver">v0.1.0</span></div>
-      <div class="meta">复刻 iStoreOS 软件中心外观 · Rust 版</div></div></div>
-    <div class="desc">管理本机 systemd 用户服务：启动/停止/重启、端口探测、内存/负载/运行时长。单二进制 tiny_http + 内嵌前端，GitHub Actions 交叉编译 aarch64-musl，RSS 低。</div>
-    <div class="foot"><div class="tags"><span class="tag">rust</span><span class="tag">systemd</span><span class="tag">web</span></div></div>
-  </div>`;
+  const el = $('#view-about'); if (!el) return;
 }
 
-loadSystem();
-loadApps();
+// 初始化
+loadHome();
