@@ -146,7 +146,8 @@ fn net_rx_tx() -> (u64, u64) {
 
 fn lan_ips() -> Vec<String> {
     let (_, out) = run_cmd("ip -4 -o addr show 2>/dev/null | awk '{print $2\"=\"$4}' | grep -v 'lo\\|127.0.0.1'");
-    out.lines().map(|s| s.split('/').next().unwrap_or("").to_string()).collect()
+    out.lines().map(|s| s.split('=').nth(1).unwrap_or("").split('/').next().unwrap_or("").to_string())
+        .filter(|s| !s.is_empty()).collect()
 }
 
 fn drives() -> Vec<serde_json::Value> {
